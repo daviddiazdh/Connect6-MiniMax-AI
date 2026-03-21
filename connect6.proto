@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package connect6;
+option go_package = "./pb";
+
+service GameServer {
+  rpc Play(stream PlayerAction) returns (stream GameState);
+}
+
+message Point {
+  int32 x = 1;
+  int32 y = 2;
+}
+
+enum PlayerColor {
+  UNKNOWN = 0;
+  BLACK = 1;
+  WHITE = 2;
+}
+
+enum GameResult {
+  ONGOING = 0;
+  BLACK_WIN = 1;
+  WHITE_WIN = 2;
+  DRAW = 3;
+  BLACK_TIMEOUT = 4;
+  WHITE_TIMEOUT = 5;
+  BLACK_INVALID = 6;
+  WHITE_INVALID = 7;
+}
+
+message PlayerAction {
+  oneof action {
+    string register_team = 1;
+    Move move = 2;
+    bool resign = 3;
+  }
+}
+
+message Move {
+  repeated Point stones = 1;
+}
+
+message Row {
+  repeated PlayerColor cells = 1;
+}
+
+message GameState {
+  enum Status {
+    WAITING = 0;
+    PLAYING = 1;
+    FINISHED = 2;
+  }
+
+  Status status = 1;
+  bool is_my_turn = 2;
+  PlayerColor my_color = 3;
+  repeated Point opponent_stones = 4;
+  int32 stones_required = 5;
+  string message = 6;
+  PlayerColor winner = 7;
+  GameResult result = 8;
+  repeated Row board = 9;
+}
