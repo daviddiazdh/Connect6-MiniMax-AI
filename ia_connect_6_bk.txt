@@ -303,7 +303,6 @@ struct ThreatsSearch{
     bool op_forced;
     int score;
     vector<Move> threats;
-    vector<Move> forced_defense;
 };
 
 struct Threat{
@@ -311,7 +310,7 @@ struct Threat{
     bool op_forced;
 };
 
-Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_score, vector<Move>& threats, vector<Move>& forced_defense) {
+Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_score, vector<Move>& threats) {
     
     Threat threat = {{false, {}}, false};
     int my_stones = 0;
@@ -320,7 +319,6 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
     int automaton_state = 0;
     vector<Pos> empty;
     Move possible_threats;
-    int possible_threat_side = 0;
 
     for (int i = 0; i < 6; ++i) {
         int nr = r + i * dr;
@@ -339,12 +337,10 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
                 int last_nr = r + (i - 1) * dr;
                 int last_nc = c + (i - 1) * dc;
                 possible_threats.p1 = {last_nr, last_nc};
-                possible_threat_side = 1;
                 automaton_state = 3;
             }
             else if(automaton_state == 3 && eval == 0){
                 possible_threats.p2 = {nr, nc};
-                possible_threat_side = 2;
                 automaton_state = 4;
             }
             else if(automaton_state == 3 && eval != 0) automaton_state = 3;
@@ -400,134 +396,27 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
 
             if(wide_open && my_stones == 2){
 
-                bool different = true;
-                for(auto &t : threats){
-                    if( t.p1.x == possible_threats.p1.x && t.p1.y == possible_threats.p1.y && 
-                        t.p2.x == possible_threats.p2.x && t.p2.y == possible_threats.p2.y)
-                        {
-                        different = false;
-                        break;
-                    }
-                }
-
-                if(different){
-                    possible_threats.type = 2;
-                    threats.push_back(possible_threats);
-                }
-                
+                possible_threats.type = 2;
+                threats.push_back(possible_threats);
 
             } else if (wide_open && my_stones == 3){
-
-                bool different = true;
 
                 // Chequear si hay una amenaza de 3 open doble que es imparable
                 for(auto &t : threats){
                     if(t.type == 3 && 
                         (t.p1.x != possible_threats.p1.x && t.p1.y != possible_threats.p1.y) && 
-                        (t.p2.x != possible_threats.p2.x && t.p2.y != possible_threats.p2.y))
-                        {
+                        (t.p2.x != possible_threats.p2.x && t.p2.y != possible_threats.p2.y)){
                         threat.win.win = true;
                         threat.win.move = {t.p1, possible_threats.p1};
                     }
-
-                    if( t.p1.x == possible_threats.p1.x && t.p1.y == possible_threats.p1.y && 
-                        t.p2.x == possible_threats.p2.x && t.p2.y == possible_threats.p2.y)
-                        {
-                        different = false;
-                    }
-
                 }
-                
-                if(different){
-                    possible_threats.type = 3;
-                    threats.push_back(possible_threats);
-                }
+
+                possible_threats.type = 3;
+                threats.push_back(possible_threats);
 
             }
 
             return threat;
-
-        } else {
-
-            // Caso en que no es amenaza open, pero también se puede hacer un 4 wide_open
-
-            vector<int> range = {-1, 0, 5, 6};
-            bool wide_open = true;
-            for(int &i : range){
-                int nr = r + i * dr;
-                int nc = c + i * dc;
-
-                if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
-                    if (board[nr][nc] == 2){
-                        wide_open = false;
-                        break;
-                    }
-                } else {
-                    wide_open = false;
-                    break;
-                }
-            }
-            
-            acc_score += score_by_count(my_stones, true, wide_open);
-
-            if(wide_open && my_stones == 2){
-
-                Move m;
-
-                if(board[r + 1 * dr][c + 1 * dc] == 0){
-                    m = {{r + 1 * dr, c + 1 * dc}, {r + 3 * dr, c + 3 * dc}, 2};
-                } else if(board[r + 3 * dr][c + 3 * dc] == 1){
-                    m = {{r + 2 * dr, c + 2 * dc}, {r + 4 * dr, c + 4 * dc}, 2};
-                } else{
-                    m = {{r + 2 * dr, c + 2 * dc}, {r + 3 * dr, c + 3 * dc}, 2};
-                }
-
-                bool different = true;
-                for(auto &t : threats){
-                    if( t.p1.x == m.p1.x && t.p1.y == m.p1.y && 
-                        t.p2.x == m.p2.x && t.p2.y == m.p2.y)
-                        {
-                        different = false;
-                        break;
-                    }
-                }
-
-                if(different){
-                    threats.push_back(m);
-                }
-            }
-
-            // } else if (wide_open && my_stones == 3){
-
-            //     bool different = true;
-
-            //     // Chequear si hay una amenaza de 3 open doble que es imparable
-            //     for(auto &t : threats){
-            //         if(t.type == 3 && 
-            //             (t.p1.x != possible_threats.p1.x && t.p1.y != possible_threats.p1.y) && 
-            //             (t.p2.x != possible_threats.p2.x && t.p2.y != possible_threats.p2.y))
-            //             {
-            //             threat.win.win = true;
-            //             threat.win.move = {t.p1, possible_threats.p1};
-            //         }
-
-            //         if( t.p1.x == possible_threats.p1.x && t.p1.y == possible_threats.p1.y && 
-            //             t.p2.x == possible_threats.p2.x && t.p2.y == possible_threats.p2.y)
-            //             {
-            //             different = false;
-            //         }
-
-            //     }
-                
-            //     if(different){
-            //         possible_threats.type = 3;
-            //         threats.push_back(possible_threats);
-            //     }
-
-            // }
-
-            // return threat;
-
 
         }
 
@@ -538,15 +427,12 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
     // Puntuación para el oponente (negativa)
     if (opponent_stones > 0){
 
-        if(opponent_stones == 4 || opponent_stones == 5){
-            threat.op_forced = true;
-            // cout << "Hay una jugada forzada de al menos una piedra del rival" << endl;
-        }
-
         if(open){
+            if(opponent_stones == 4 || opponent_stones == 5){
+                threat.op_forced = true;
+            }
             vector<int> range = {-1, 6};
             bool wide_open = true;
-            vector<Pos> empty_bounds;
             for(int &i : range){
                 int nr = r + i * dr;
                 int nc = c + i * dc;
@@ -555,8 +441,6 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
                     if (board[nr][nc] == 2){
                         wide_open = false;
                         break;
-                    } else {
-                        empty_bounds.push_back({nr, nc});
                     }
                 } else {
                     wide_open = false;
@@ -564,50 +448,7 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
                 }
             }
             acc_score += score_by_count(opponent_stones, false, wide_open);
-
-            if(wide_open && opponent_stones == 4){
-                // printf("Jugadas que tengo para defender: (%d,%d) y (%d,%d)\n", empty_bounds[0].x, empty_bounds[0].y, possible_threats.p2.x, possible_threats.p2.y);
-                // printf("(%d,%d) y (%d,%d)\n", empty_bounds[1].x, empty_bounds[1].y, possible_threats.p1.x, possible_threats.p1.y);
-                // printf("(%d,%d) y (%d,%d)\n", possible_threats.p1.x, possible_threats.p1.y, possible_threats.p2.x, possible_threats.p2.y);
-                forced_defense.push_back({empty_bounds[0], possible_threats.p2, 4});
-                forced_defense.push_back({empty_bounds[1], possible_threats.p1, 4});
-                forced_defense.push_back({possible_threats.p1, possible_threats.p2, 4});
-            }
-
             return threat;
-        } else if(opponent_stones == 5){
-
-            vector<int> range = {-1, 6};
-            bool wide_open = true;
-            vector<Pos> empty_bounds;
-            for(int &i : range){
-                int nr = r + i * dr;
-                int nc = c + i * dc;
-
-                if (nr >= 0 && nr < 19 && nc >= 0 && nc < 19) {
-                    if (board[nr][nc] == 2){
-                        wide_open = false;
-                        break;
-                    } else {
-                        empty_bounds.push_back({nr, nc});
-                    }
-                } else {
-                    wide_open = false;
-                    break;
-                }
-            }
-            acc_score += score_by_count(opponent_stones, false, wide_open);
-
-            if(wide_open && possible_threat_side == 1){
-                // printf("Jugadas que tengo para defender: (%d,%d) y (%d,%d)\n", empty_bounds[1].x, empty_bounds[1].y, possible_threats.p1.x, possible_threats.p1.y);
-                forced_defense.push_back({empty_bounds[1], possible_threats.p1, 5});
-            } else if(wide_open && possible_threat_side == 2){
-                // printf("Jugadas que tengo para defender: (%d,%d) y (%d,%d)\n", empty_bounds[0].x, empty_bounds[0].y, possible_threats.p2.x, possible_threats.p2.y);
-                forced_defense.push_back({empty_bounds[0], possible_threats.p2, 5});
-            }
-
-            return threat;
-
         }
 
         acc_score += score_by_count(opponent_stones, false, false);
@@ -626,11 +467,10 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
 // - En caso de que el rival no tenga ninguna jugada que nos fuerce a taparlo, entonces llamamos a VCF y le pasamos los threats calculados aquí
 ThreatsSearch evaluate_threats(Board board) {
 
-    ThreatsSearch threatSearch = {{false, {}}, false, 0, {}};
+    ThreatsSearch threatS = {{false, {}}, false, 0, {}};
 
     int total_score = 0;
     vector<Move> threats = {};
-    vector<Move> forced_defense = {};
     // Direcciones: Horizontal (1,0), Vertical (0,1), Diag1 (1,1), Diag2 (1,-1)
     int dr[] = {1, 0, 1, 1};
     int dc[] = {0, 1, 1, -1};
@@ -639,21 +479,18 @@ ThreatsSearch evaluate_threats(Board board) {
         for (int c = 0; c < 19; ++c) {
             // Solo evaluamos si hay una piedra o si es un inicio de posible línea
             for (int d = 0; d < 4; ++d) {
-                Threat current_threat = evaluate_line_threat(board, r, c, dr[d], dc[d], total_score, threats, forced_defense);
+                Threat current_threat = evaluate_line_threat(board, r, c, dr[d], dc[d], total_score, threats);
                 if(current_threat.win.win){
-                    threatSearch.win = current_threat.win;
-                    return threatSearch;
+                    threatS.win = current_threat.win;
+                    return threatS;
                 }
-                if(current_threat.op_forced){
-                    threatSearch.op_forced = true;
-                }
+                threatS.op_forced = current_threat.op_forced;
             }
         }
     }
-    threatSearch.score = total_score;
-    threatSearch.threats = threats;
-    threatSearch.forced_defense = forced_defense;
-    return threatSearch;
+    threatS.score = total_score;
+    threatS.threats = threats;
+    return threatS;
 }
 
 
@@ -698,7 +535,7 @@ int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int 
         return a.score > b.score;
     });
     vector<Pos> best_points;
-    int limit = min((int)rated.size(), 13); 
+    int limit = min((int)rated.size(), 15); 
     for(int i = 0; i < limit; ++i) {
         best_points.push_back(rated[i].p);
     }
@@ -764,7 +601,7 @@ MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
         return a.score > b.score;
     });
     vector<Pos> best_points;
-    int limit = min((int)rated.size(), 40); 
+    int limit = min((int)rated.size(), 50); 
     for(int i = 0; i < limit; ++i) {
         best_points.push_back(rated[i].p);
     }
@@ -795,98 +632,6 @@ MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
     return best_m;
 }
 
-
-bool vcf_recursive(Board board, bool is_attacking, int depth){
-
-    if(depth == 0) return false;
-
-    if(is_attacking){
-
-        ThreatsSearch board_threats = evaluate_threats(board);
-        if(board_threats.win.win) return true;
-        if(board_threats.op_forced) return false;
-
-        for(auto &t : board_threats.threats){
-            board[t.p1.x][t.p1.y] = 1;
-            board[t.p2.x][t.p2.y] = 1;
-
-            if(vcf_recursive(board, false, depth - 1)){
-                return true;
-            }
-
-            board[t.p1.x][t.p1.y] = 0;
-            board[t.p2.x][t.p2.y] = 0;
-
-        }
-
-        return false;
-
-    } else {
-
-        ThreatsSearch board_threats = evaluate_threats(board);
-        if(board_threats.win.win) return false;
-        if(board_threats.forced_defense.size() == 0) return false;
-
-        bool forced_win = true;
-
-        for(auto &t : board_threats.forced_defense){
-            board[t.p1.x][t.p1.y] = 2;
-            board[t.p2.x][t.p2.y] = 2;
-
-            if(!vcf_recursive(board, true, depth - 1)){
-                forced_win = false;
-                board[t.p1.x][t.p1.y] = 0;
-                board[t.p2.x][t.p2.y] = 0;
-                break;
-            }
-
-            board[t.p1.x][t.p1.y] = 0;
-            board[t.p2.x][t.p2.y] = 0;
-
-        }
-
-        return forced_win;
-
-    }
-
-}
-
-struct VCFMove{
-    bool vcf_win;
-    Move vcf_move;
-};
-
-
-
-VCFMove vcf_search(Board board, vector<Move> threats){
-
-    VCFMove vcf_move;
-
-    // cout << "Busquemos una victoria forzada con VCF..." << endl;
-
-    for(auto &t : threats){
-
-        board[t.p1.x][t.p1.y] = 1;
-        board[t.p2.x][t.p2.y] = 1;
-
-        printf("Probando rama de (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
-
-        if(vcf_recursive(board, true, 5)){
-            vcf_move.vcf_win = true;
-            vcf_move.vcf_move = {t.p1, t.p2, 0};
-        }
-
-        board[t.p1.x][t.p1.y] = 0;
-        board[t.p2.x][t.p2.y] = 0;
-
-    }
-
-    vcf_move.vcf_win = false;
-    vcf_move.vcf_move = {{}, {}, 0};
-
-    return vcf_move;
-
-}
 
 
 
@@ -947,28 +692,13 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
                 PlayerAction move_action;
                 auto* move = move_action.mutable_move();
 
-                // Iniciamos cronómetro en un hilo aparte
-                std::thread timer([&]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(9500)); // Tiempo límite
-                    timeout_flag.store(true); 
-                });
-
-                if(!win && !board_threats.op_forced){
-
-                    VCFMove vcf_move = vcf_search(current_board, board_threats.threats);
-                    
-                    // cout << "En este momento llamaría a VCF, SI TAN SOLO TUVIERA UNO" << endl;
-                    if(vcf_move.vcf_win){
-                        cout << "Conseguimos la jugada ganadora" << endl;
-                        best_action.p1 = vcf_move.vcf_move.p1;
-                        best_action.p2 = vcf_move.vcf_move.p2;
-                        best_action.single_stone = false;
-                        win = true;
-                    }
-
-                }
-
                 if (!win){
+
+                    // Iniciamos cronómetro en un hilo aparte
+                    std::thread timer([&]() {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(8000)); // Tiempo límite
+                        timeout_flag.store(true); 
+                    });
 
                     
                     

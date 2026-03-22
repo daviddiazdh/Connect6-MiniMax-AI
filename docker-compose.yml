@@ -7,7 +7,7 @@ services:
       - game-network
 
   ia-main:
-    build: ./agente_cpp
+    build: ./agente_cpp_worse_old
     restart: always
     environment:
       - SERVER_ADDR=servidor:50051
