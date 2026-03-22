@@ -28,6 +28,36 @@ struct MovePair {
     bool single_stone = false;
 };
 
+// <------------ Amenazas --------------->
+struct Win{
+    bool win;
+    vector<Pos> move;
+};
+
+struct Move {
+    Pos p1, p2;
+    int type;
+};
+
+struct ThreatsSearch{
+    Win win;
+    bool op_forced;
+    int score;
+    vector<Move> threats;
+    vector<Move> forced_defense;
+};
+
+struct Threat{
+    Win win;
+    bool op_forced;
+};
+
+struct VCFMove{
+    bool vcf_win;
+    Move vcf_move;
+};
+// <------------------------------>
+
 std::atomic<bool> timeout_flag; 
 
 // --- Prototipos de Funciones ---
@@ -39,6 +69,8 @@ int evaluate_line(Board board, int r, int c, int dr, int dc);
 int evaluate_fitness(Board board);
 int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int stones_req);
 MovePair solve_at_fixed_depth(Board board, int depth, int stones_req);
+bool vcf_recursive(Board board, bool is_attacking, int depth, int player);
+VCFMove vcf_search(Board board, vector<Move> threats, int player);
 
 // --- Implementación de Funciones ---
 void sync_board(const connect6::GameState& state, Board local_board) {
@@ -285,28 +317,7 @@ int evaluate_fitness(Board board) {
 
 // ---------------------------- Lógica de Amenazas --------------------------------
 
-struct Win{
-    bool win;
-    vector<Pos> move;
-};
 
-struct Move {
-    Pos p1, p2;
-    int type;
-};
-
-struct ThreatsSearch{
-    Win win;
-    bool op_forced;
-    int score;
-    vector<Move> threats;
-    vector<Move> forced_defense;
-};
-
-struct Threat{
-    Win win;
-    bool op_forced;
-};
 
 Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_score, vector<Move>& threats, vector<Move>& forced_defense, int player) {
     
@@ -678,6 +689,19 @@ struct ScoredPos { Pos p; int score; };
 int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int stones_req) {
     // 1. Verificación de seguridad y salida
     if (timeout_flag.load()) return isMaximizing ? -1e8 : 1e8; // Valor neutral/malo si cortamos
+
+    ThreatsSearch threats = evaluate_threats(board, isMaximizing ? 1 : 2);
+
+    if (threats.win.win) {
+        return isMaximizing ? 1e8 : -1e8;
+    }
+
+    if (depth <= 2 && !threats.op_forced && !threats.threats.empty()) {
+        VCFMove vcf = vcf_search(board, threats.threats, (isMaximizing ? 1 : 2));
+        if (vcf.vcf_win) {
+            return isMaximizing ? 1e8 : -1e8;
+        }
+    }
     
     if (depth == 0) {
         return evaluate_fitness(board);
@@ -721,8 +745,8 @@ int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int 
             board[m.p1.x][m.p1.y] = 0;
             if (!m.single_stone) board[m.p2.x][m.p2.y] = 0;
 
-            maxEval = std::max(maxEval, eval);
-            alpha = std::max(alpha, eval);
+            maxEval = max(maxEval, eval);
+            alpha = max(alpha, eval);
             
             if (beta <= alpha || timeout_flag.load()) break;
         }
@@ -740,8 +764,8 @@ int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int 
             board[m.p1.x][m.p1.y] = 0;
             if (!m.single_stone) board[m.p2.x][m.p2.y] = 0;
 
-            minEval = std::min(minEval, eval);
-            beta = std::min(beta, eval);
+            minEval = min(minEval, eval);
+            beta = min(beta, eval);
 
             if (beta <= alpha || timeout_flag.load()) break;
         }
@@ -793,21 +817,23 @@ MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
 }
 
 
-bool vcf_recursive(Board board, bool is_attacking, int depth){
+bool vcf_recursive(Board board, bool is_attacking, int depth, int player){
+
+    int opponent = (player == 1 ? 2 : 1);
 
     if(depth == 0) return false;
 
     if(is_attacking){
 
-        ThreatsSearch board_threats = evaluate_threats(board, 1);
+        ThreatsSearch board_threats = evaluate_threats(board, player);
         if(board_threats.win.win) return true;
         if(board_threats.op_forced) return false;
 
         for(auto &t : board_threats.threats){
-            board[t.p1.x][t.p1.y] = 1;
-            board[t.p2.x][t.p2.y] = 1;
+            board[t.p1.x][t.p1.y] = player;
+            board[t.p2.x][t.p2.y] = player;
 
-            if(vcf_recursive(board, false, depth - 1)){
+            if(vcf_recursive(board, false, depth - 1, opponent)){
                 return true;
             }
 
@@ -820,17 +846,17 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
 
     } else {
 
-        ThreatsSearch board_threats = evaluate_threats(board, 2);
+        ThreatsSearch board_threats = evaluate_threats(board, opponent);
         if(board_threats.win.win) return false;
         if(board_threats.forced_defense.size() == 0) return false;
 
         bool forced_win = true;
 
         for(auto &t : board_threats.forced_defense){
-            board[t.p1.x][t.p1.y] = 2;
-            board[t.p2.x][t.p2.y] = 2;
+            board[t.p1.x][t.p1.y] = opponent;
+            board[t.p2.x][t.p2.y] = opponent;
 
-            if(!vcf_recursive(board, true, depth - 1)){
+            if(!vcf_recursive(board, true, depth - 1, opponent)){
                 forced_win = false;
                 board[t.p1.x][t.p1.y] = 0;
                 board[t.p2.x][t.p2.y] = 0;
@@ -848,27 +874,23 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
 
 }
 
-struct VCFMove{
-    bool vcf_win;
-    Move vcf_move;
-};
 
 
 
-VCFMove vcf_search(Board board, vector<Move> threats){
+VCFMove vcf_search(Board board, vector<Move> threats, int player){
 
     VCFMove vcf_move;
 
-    cout << "Busquemos una victoria forzada con VCF..." << endl;
+    // cout << "Busquemos una victoria forzada con VCF..." << endl;
 
     for(auto &t : threats){
 
-        board[t.p1.x][t.p1.y] = 1;
-        board[t.p2.x][t.p2.y] = 1;
+        board[t.p1.x][t.p1.y] = player;
+        board[t.p2.x][t.p2.y] = player;
 
-        printf("Probando rama de (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
+        // printf("Probando rama de (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
 
-        if(vcf_recursive(board, true, 5)){
+        if(vcf_recursive(board, true, 5, player)){
             vcf_move.vcf_win = true;
             vcf_move.vcf_move = {t.p1, t.p2, 0};
         }
@@ -952,9 +974,8 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
 
                 if(!win && !board_threats.op_forced){
 
-                    VCFMove vcf_move = vcf_search(current_board, board_threats.threats);
+                    VCFMove vcf_move = vcf_search(current_board, board_threats.threats, 1);
                     
-                    // cout << "En este momento llamaría a VCF, SI TAN SOLO TUVIERA UNO" << endl;
                     if(vcf_move.vcf_win){
                         cout << "Conseguimos la jugada ganadora" << endl;
                         best_action.p1 = vcf_move.vcf_move.p1;
@@ -967,8 +988,6 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
 
                 if (!win){
 
-                    
-                    
                     for (int d = 1; d <= 6; ++d) {
                         
                         // Llamamos a la búsqueda para esta profundidad específica

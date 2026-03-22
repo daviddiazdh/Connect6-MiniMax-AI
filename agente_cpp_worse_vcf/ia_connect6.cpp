@@ -19,21 +19,34 @@ using connect6::GameServer;
 using connect6::PlayerAction;
 using connect6::GameState;
 using connect6::Point;
-
 using namespace std;
 
+
+// ============================================================================
+// Cliente de Connect6 usando gRPC + IA basada en:
+// - Minimax con poda alpha-beta
+// - Tabla de transposición (Zobrist hashing)
+// - Evaluación heurística por patrones
+// - Búsqueda de amenazas (Threat-based search)
+// - VCF (Victory by Continuous Forcing)
+// ============================================================================
+
+
+// Representación del tablero
 typedef int8_t Board[19][19];
-
+// Posición en el tablero
 struct Pos { int x, y; };
-
+// Representa una posición en el tablero
 struct MovePair {
     Pos p1, p2;
     bool single_stone = false;
 };
-
+// Representa una jugada (1 o 2 piedras dependiendo del turno)
 std::atomic<bool> timeout_flag; 
 
-// --- Prototipos de Funciones ---
+// =============================================================================
+// Prototipos de Funciones
+// =============================================================================
 void sync_board(const connect6::GameState& state, Board local_board);
 vector<Pos> get_candidates(Board board);
 vector<MovePair> generate_move_combinations(const vector<Pos>& candidates, int stones_required);
@@ -43,9 +56,24 @@ int evaluate_fitness(Board board);
 int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int stones_req, uint64_t hash);
 MovePair solve_at_fixed_depth(Board board, int depth, int stones_req);
 
-// < ----------------- Lógica para Zobrist y TT -------------- >
+
+// =================================================================================
+// ZOBRIST HASHING y TRANSPOSITION TABLE
+// Para evitar recalcular estados ya explorados y mejorar el rendimiento de minimax
+// =================================================================================
+
+// Tabla de hashing aleatorio por celda y estado (vacío, jugador, oponente)
 uint64_t zobrist[19][19][3];
 
+
+/**
+ * @brief Inicializa la tabla Zobrist con valores aleatorios para hashing rápido.
+ *
+ * Cada celda del tablero y cada posible valor (vacío, mi piedra, piedra oponente)
+ * recibe un número aleatorio de 64 bits para usar en hashing Zobrist.
+ *
+ * Complejidad: O(19*19*3)
+ */
 void init_zobrist() {
     std::mt19937_64 rng(123456);
     for (int r = 0; r < 19; ++r)
@@ -54,6 +82,16 @@ void init_zobrist() {
                 zobrist[r][c][k] = rng();
 }
 
+/**
+ * @brief Calcula el hash Zobrist de un tablero.
+ *
+ * Combina los valores Zobrist de cada celda usando XOR.
+ *
+ * Complejidad: O(19*19)
+ *
+ * @param board Tablero actual representado como Board[19][19].
+ * @return uint64_t Valor del hash Zobrist del tablero.
+ */
 uint64_t compute_hash(Board board) {
     uint64_t h = 0;
     for (int r = 0; r < 19; ++r)
@@ -62,8 +100,10 @@ uint64_t compute_hash(Board board) {
     return h;
 }
 
+// Calcula hash completo del tablero (O(n²))
 enum TTFlag { EXACT, LOWERBOUND, UPPERBOUND };
 
+// Entrada almacenada en TT
 struct TTEntry {
     int value;
     int depth;
@@ -72,10 +112,19 @@ struct TTEntry {
 
 unordered_map<uint64_t, TTEntry> TT;
 
-// < -------------------------------------------------- >
 
 
-// --- Implementación de Funciones ---
+/**
+ * @brief Sincroniza el tablero local con el estado recibido del servidor.
+ *
+ * Convierte los valores de connect6::GameState a un arreglo local Board[19][19]:
+ * 0 -> vacío, 1 -> mi piedra, 2 -> piedra del oponente.
+ *
+ * Complejidad: O(19*19)
+ *
+ * @param state Estado del juego recibido del servidor.
+ * @param local_board Tablero local que será actualizado.
+ */
 void sync_board(const connect6::GameState& state, Board local_board) {
     for (int r = 0; r < 19; ++r) {
         const auto& row = state.board(r);
@@ -92,8 +141,23 @@ void sync_board(const connect6::GameState& state, Board local_board) {
     }
 }
 
+// ============================================================================
+// GENERACIÓN DE MOVIMIENTOS
+// ============================================================================
+
+/**
+ * @brief Sincroniza el tablero local con el estado recibido del servidor.
+ *
+ * Convierte los valores de connect6::GameState a un arreglo local Board[19][19]:
+ * 0 -> vacío, 1 -> mi piedra, 2 -> piedra del oponente.
+ *
+ * Complejidad: O(19*19)
+ *
+ * @param state Estado del juego recibido del servidor.
+ * @param local_board Tablero local que será actualizado.
+ */
 vector<Pos> get_candidates(Board board) {
-    std::vector<Pos> candidates;
+    vector<Pos> candidates;
     bool board_empty = true;
     bool visited[19][19] = {false};
 
@@ -124,8 +188,20 @@ vector<Pos> get_candidates(Board board) {
     return candidates;
 }
 
-std::vector<MovePair> generate_move_combinations(const std::vector<Pos>& candidates, int stones_required) {
-    std::vector<MovePair> combinations;
+/**
+ * @brief Genera todas las combinaciones posibles de movimientos a partir de los candidatos.
+ *
+ * Si se requiere 1 piedra, genera un movimiento por candidato.  
+ * Si se requieren 2 piedras, genera todas las combinaciones únicas de 2 candidatos.
+ *
+ * Complejidad: O(n^2) si stones_required == 2, O(n) si stones_required == 1
+ *
+ * @param candidates Lista de posiciones candidatas.
+ * @param stones_required Número de piedras a colocar (1 o 2).
+ * @return vector<MovePair> Lista de movimientos posibles.
+ */
+vector<MovePair> generate_move_combinations(const vector<Pos>& candidates, int stones_required) {
+    vector<MovePair> combinations;
     
     if (stones_required == 1) {
         for (const auto& p : candidates) {
@@ -143,6 +219,16 @@ std::vector<MovePair> generate_move_combinations(const std::vector<Pos>& candida
 }
 
 
+
+/**
+ * @brief Asigna un valor heurístico según la cantidad de piedras en una ventana
+ * de longitud 6, considerando si es propia, del oponente y si es "wide open".
+ *
+ * @param count Número de piedras consecutivas en la ventana.
+ * @param is_mine Indica si las piedras son propias (true) o del oponente (false).
+ * @param wide_open Indica si la ventana tiene ambos extremos abiertos.
+ * @return Valor heurístico asignado a la ventana.
+ */
 int score_by_count(int count, bool is_mine, bool wide_open) {
     
     switch (count) {
@@ -155,7 +241,15 @@ int score_by_count(int count, bool is_mine, bool wide_open) {
     }
 }
 
-
+/**
+ * @brief Asigna un valor heurístico según la cantidad de piedras en una ventana
+ * de longitud 6, considerando si es propia, del oponente y si es "wide open".
+ *
+ * @param count Número de piedras consecutivas en la ventana.
+ * @param is_mine Indica si las piedras son propias (true) o del oponente (false).
+ * @param wide_open Indica si la ventana tiene ambos extremos abiertos.
+ * @return Valor heurístico asignado a la ventana.
+ */
 int evaluate_line(Board board, int r, int c, int dr, int dc) {
     int my_stones = 0;
     int opponent_stones = 0;
@@ -250,6 +344,13 @@ int evaluate_line(Board board, int r, int c, int dr, int dc) {
     return 0;
 }
 
+/**
+ * @brief Evalúa todo el tablero calculando el puntaje heurístico total
+ * sumando las evaluaciones de todas las líneas posibles.
+ *
+ * @param board Tablero de juego de 19x19.
+ * @return Puntaje heurístico total de la posición.
+ */
 int evaluate_fitness(Board board) {
     int total_score = 0;
 
@@ -295,6 +396,21 @@ struct Threat{
     bool op_forced;
 };
 
+
+/**
+ * @brief Evalúa amenazas en una línea específica y actualiza puntaje y amenazas.
+ *
+ * @param board Tablero de juego.
+ * @param r Fila inicial.
+ * @param c Columna inicial.
+ * @param dr Incremento de fila.
+ * @param dc Incremento de columna.
+ * @param acc_score Referencia al score acumulado del tablero.
+ * @param threats Vector de amenazas detectadas (se actualiza).
+ * @param forced_defense Vector de defensas forzadas del oponente (se actualiza).
+ * @param player Jugador a evaluar (1 = propio, 2 = oponente).
+ * @return Estructura Threat con información de la línea.
+ */
 Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_score, vector<Move>& threats, vector<Move>& forced_defense, int player) {
     
     Threat threat = {{false, {}}, false};
@@ -603,11 +719,18 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
 }
 
 
-// Tiene que devolver múltiples cosas: 
-// - Debe ser capaz de detectar victorias directas, en cuyo caso, devolvemos esa jugada de una vez
-// - Debe ser capaz de detectar si el rival tiene jugada forzada de al menos una casilla, es decir, el rival tiene un open (no wide_open), en este caso llamamos a minimax normal
-// - Como minimax puede llegar a ser llamada a partir de ella, aprovechamos y calculamos el fitness o score de la posición actual que no cuesta nada.
-// - En caso de que el rival no tenga ninguna jugada que nos fuerce a taparlo, entonces llamamos a VCF y le pasamos los threats calculados aquí
+/**
+ * @brief Evalúa todas las amenazas del tablero para un jugador dado.
+ *
+ * - Detecta victorias directas.
+ * - Detecta jugadas forzadas del oponente.
+ * - Calcula score heurístico de la posición.
+ * - Devuelve amenazas y defensas posibles.
+ *
+ * @param board Tablero de juego.
+ * @param player Jugador a evaluar (1 = propio, 2 = oponente).
+ * @return Estructura ThreatsSearch con toda la información de amenazas.
+ */
 ThreatsSearch evaluate_threats(Board board, int player) {
 
     ThreatsSearch threatSearch = {{false, {}}, false, 0, {}};
@@ -641,16 +764,35 @@ ThreatsSearch evaluate_threats(Board board, int player) {
 }
 
 
-// < ---------------------------------------------------------------------------------- >
-
+/**
+ * @brief Evalúa todas las amenazas del tablero para un jugador dado.
+ *
+ * - Detecta victorias directas.
+ * - Detecta jugadas forzadas del oponente.
+ * - Calcula score heurístico de la posición.
+ * - Devuelve amenazas y defensas posibles.
+ *
+ * @param board Tablero de juego.
+ * @param player Jugador a evaluar (1 = propio, 2 = oponente).
+ * @return Estructura ThreatsSearch con toda la información de amenazas.
+ */
 inline uint64_t update_hash(uint64_t hash, int r, int c, int old_val, int new_val) {
     hash ^= zobrist[r][c][old_val]; // quitar valor viejo
     hash ^= zobrist[r][c][new_val]; // agregar valor nuevo
     return hash;
 }
 
+/**
+ * @brief Actualiza el hash de Zobrist para un cambio de posición en el tablero.
+ *
+ * @param hash Hash actual del tablero.
+ * @param r Fila de la posición a cambiar.
+ * @param c Columna de la posición a cambiar.
+ * @param old_val Valor antiguo en la posición.
+ * @param new_val Valor nuevo en la posición.
+ * @return Hash actualizado.
+ */
 int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int stones_req, uint64_t hash) {
-    // 1. Verificación de seguridad y salida
     if (timeout_flag.load()) return isMaximizing ? -1e8 : 1e8;
     
 
@@ -763,6 +905,15 @@ int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int 
 
 }
 
+/**
+ * @brief Busca la mejor jugada considerando todas las combinaciones de movimientos
+ * hasta una profundidad fija, usando minimax.
+ *
+ * @param board Tablero actual.
+ * @param depth Profundidad de búsqueda.
+ * @param stones_req Número de piedras a colocar.
+ * @return Mejor par de movimientos encontrado.
+ */
 MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
     auto candidates = get_candidates(board);
     auto moves = generate_move_combinations(candidates, stones_req);
@@ -792,27 +943,34 @@ MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
 }
 
 
-
+/**
+ * @brief Busca recursivamente Victory by Continuous Four (VCF) en el tablero.
+ *
+ * @param board Tablero actual.
+ * @param is_attacking Indica si es turno de ataque (true) o defensa (false).
+ * @param depth Profundidad restante para la búsqueda VCF.
+ * @return true si se encuentra victoria forzada, false de lo contrario.
+ */
 bool vcf_recursive(Board board, bool is_attacking, int depth){
 
     if(depth == 0) return false;
 
     if(is_attacking){
 
-        cout << "Ataque..." << endl;
+        // cout << "Ataque..." << endl;
         ThreatsSearch board_threats = evaluate_threats(board, 1);
         if(board_threats.win.win){
-            cout << "Victoria evaluada..." << endl;
+            // cout << "Victoria evaluada..." << endl;
             return true;
         }
         if(board_threats.op_forced){
-            cout << "Tengo jugada forzada que no puedo controlar..." << endl;
+            // cout << "Tengo jugada forzada que no puedo controlar..." << endl;
             return false;
         }
 
         for(auto &t : board_threats.threats){
 
-            printf("Ahora podemos atacar con (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
+            // printf("Ahora podemos atacar con (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
 
             board[t.p1.x][t.p1.y] = 1;
             board[t.p2.x][t.p2.y] = 1;
@@ -830,14 +988,14 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
 
     } else {
 
-        cout << "Evaluamos defensa..." << endl;
+        // cout << "Evaluamos defensa..." << endl;
         ThreatsSearch board_threats = evaluate_threats(board, 2);
         if(board_threats.win.win){
-            cout << "Gana el rival" << endl;
+            // cout << "Gana el rival" << endl;
             return false;
         }
         if(board_threats.forced_defense.size() == 0){
-            cout << "No hay amenazas forzadas" << endl;
+            // cout << "No hay amenazas forzadas" << endl;
             return false;
         } 
 
@@ -847,7 +1005,7 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
             board[t.p1.x][t.p1.y] = 2;
             board[t.p2.x][t.p2.y] = 2;
 
-            printf("Nos defiende con (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
+            // printf("Nos defiende con (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
 
             if(!vcf_recursive(board, true, depth - 1)){
                 forced_win = false;
@@ -867,30 +1025,39 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
 
 }
 
+/**
+ * @brief Resultado de búsqueda VCF.
+ */
 struct VCFMove{
     bool vcf_win;
     Move vcf_move;
 };
 
 
-
+/**
+ * @brief Busca una Victory by Continuous Four (VCF) considerando todas las amenazas.
+ *
+ * @param board Tablero actual.
+ * @param threats Amenazas detectadas previamente.
+ * @return Estructura VCFMove indicando si se logró VCF y el movimiento correspondiente.
+ */
 VCFMove vcf_search(Board board, vector<Move> threats){
 
     VCFMove vcf_move = {false, {}};
 
-    cout << "Busquemos una victoria forzada con VCF..." << endl;
+    // cout << "Busquemos una victoria forzada con VCF..." << endl;
 
     for(auto &t : threats){
 
         board[t.p1.x][t.p1.y] = 1;
         board[t.p2.x][t.p2.y] = 1;
 
-        printf("Probando rama de (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
+        // printf("Probando rama de (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
 
         if(vcf_recursive(board, false, 8)){
             vcf_move.vcf_win = true;
             vcf_move.vcf_move = {t.p1, t.p2, 0};
-            cout << "Conseguimos una victoria" << endl;
+            // cout << "Conseguimos una victoria" << endl;
             return vcf_move;
         }
 
@@ -907,22 +1074,26 @@ VCFMove vcf_search(Board board, vector<Move> threats){
 }
 
 
+/**
+ * @brief Lógica principal de juego conectándose al servidor, enviando movimientos y recibiendo estados.
+ *
+ * @param channel Canal GRPC para la comunicación.
+ * @param teamName Nombre del equipo registrado.
+ */
 void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
     auto stub = GameServer::NewStub(channel);
     ClientContext context;
 
-    // Abrir el stream bidireccional
     std::shared_ptr<ClientReaderWriter<PlayerAction, GameState>> stream(
         stub->Play(&context));
 
-    // 1. Registro del equipo
     std::cout << "🔄 Registrando equipo: " << teamName << std::endl;
     PlayerAction register_action;
     register_action.set_register_team(teamName);
     stream->Write(register_action);
 
     GameState state;
-    // 2. Bucle principal de juego (Recibir estados del servidor)
+
     while (stream->Read(&state)) {
         if (state.status() == connect6::GameState_Status_WAITING) {
             std::cout << "⏳ Esperando contrincante..." << std::endl;
