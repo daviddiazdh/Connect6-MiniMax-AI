@@ -7,11 +7,11 @@ services:
       - game-network
 
   ia-main:
-    build: ./agente_cpp_worse_old
+    build: ./agente_cpp_worse_vcf
     restart: always
     environment:
       - SERVER_ADDR=servidor:50051
-      - TEAM_NAME=Bot_CPP_David
+      - TEAM_NAME=Bot_CPP_Worse_VCF
     depends_on:
       - servidor
     networks:
