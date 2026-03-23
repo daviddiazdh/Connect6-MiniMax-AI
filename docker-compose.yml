@@ -7,18 +7,18 @@ services:
       - game-network
 
   ia-main:
-    build: ./agente_cpp_worse_vcf
+    build: ./AI_MiniMax_VCF_Zobrist
     restart: always
     environment:
       - SERVER_ADDR=servidor:50051
-      - TEAM_NAME=Bot_CPP_Worse_VCF
+      - TEAM_NAME=Bot_Jorge
     depends_on:
       - servidor
     networks:
       - game-network
 
   ia-worse:
-    build: ./agente_cpp_worse
+    build: ./AI_MiniMax_VCF
     restart: always
     environment:
       - SERVER_ADDR=servidor:50051

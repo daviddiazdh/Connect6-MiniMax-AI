@@ -16,16 +16,42 @@ using connect6::GameServer;
 using connect6::PlayerAction;
 using connect6::GameState;
 using connect6::Point;
-
 using namespace std;
 
 typedef int8_t Board[19][19];
-
 struct Pos { int x, y; };
 
 struct MovePair {
     Pos p1, p2;
     bool single_stone = false;
+};
+
+struct Win{
+    bool win;
+    vector<Pos> move;
+};
+
+struct Move {
+    Pos p1, p2;
+    int type;
+};
+
+struct ThreatsSearch{
+    Win win;
+    bool op_forced;
+    int score;
+    vector<Move> threats;
+    vector<Move> forced_defense;
+};
+
+struct Threat{
+    Win win;
+    bool op_forced;
+};
+
+struct VCFMove{
+    bool vcf_win;
+    Move vcf_move;
 };
 
 std::atomic<bool> timeout_flag; 
@@ -39,8 +65,21 @@ int evaluate_line(Board board, int r, int c, int dr, int dc);
 int evaluate_fitness(Board board);
 int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int stones_req);
 MovePair solve_at_fixed_depth(Board board, int depth, int stones_req);
+int evaluate_local(Board board, int r, int c);
+int evaluate_move(Board board, const MovePair& m, bool isMaximizing);
 
-// --- Implementación de Funciones ---
+
+/**
+ * @brief Sincroniza el tablero local con el estado recibido del servidor.
+ *
+ * Convierte los valores de connect6::GameState a un arreglo local Board[19][19]:
+ * 0 -> vacío, 1 -> mi piedra, 2 -> piedra del oponente.
+ *
+ * Complejidad: O(19*19)
+ *
+ * @param state Estado del juego recibido del servidor.
+ * @param local_board Tablero local que será actualizado.
+ */
 void sync_board(const connect6::GameState& state, Board local_board) {
     for (int r = 0; r < 19; ++r) {
         const auto& row = state.board(r);
@@ -57,8 +96,19 @@ void sync_board(const connect6::GameState& state, Board local_board) {
     }
 }
 
+/**
+ * @brief Sincroniza el tablero local con el estado recibido del servidor.
+ *
+ * Convierte los valores de connect6::GameState a un arreglo local Board[19][19]:
+ * 0 -> vacío, 1 -> mi piedra, 2 -> piedra del oponente.
+ *
+ * Complejidad: O(19*19)
+ *
+ * @param state Estado del juego recibido del servidor.
+ * @param local_board Tablero local que será actualizado.
+ */
 vector<Pos> get_candidates(Board board) {
-    std::vector<Pos> candidates;
+    vector<Pos> candidates;
     bool board_empty = true;
     bool visited[19][19] = {false};
 
@@ -89,8 +139,20 @@ vector<Pos> get_candidates(Board board) {
     return candidates;
 }
 
-std::vector<MovePair> generate_move_combinations(const std::vector<Pos>& candidates, int stones_required) {
-    std::vector<MovePair> combinations;
+/**
+ * @brief Genera todas las combinaciones posibles de movimientos a partir de los candidatos.
+ *
+ * Si se requiere 1 piedra, genera un movimiento por candidato.  
+ * Si se requieren 2 piedras, genera todas las combinaciones únicas de 2 candidatos.
+ *
+ * Complejidad: O(n^2) si stones_required == 2, O(n) si stones_required == 1
+ *
+ * @param candidates Lista de posiciones candidatas.
+ * @param stones_required Número de piedras a colocar (1 o 2).
+ * @return vector<MovePair> Lista de movimientos posibles.
+ */
+vector<MovePair> generate_move_combinations(const vector<Pos>& candidates, int stones_required) {
+    vector<MovePair> combinations;
     
     if (stones_required == 1) {
         for (const auto& p : candidates) {
@@ -107,7 +169,15 @@ std::vector<MovePair> generate_move_combinations(const std::vector<Pos>& candida
     return combinations;
 }
 
-
+/**
+ * @brief Asigna un valor heurístico según la cantidad de piedras en una ventana
+ * de longitud 6, considerando si es propia, del oponente y si es "wide open".
+ *
+ * @param count Número de piedras consecutivas en la ventana.
+ * @param is_mine Indica si las piedras son propias (true) o del oponente (false).
+ * @param wide_open Indica si la ventana tiene ambos extremos abiertos.
+ * @return Valor heurístico asignado a la ventana.
+ */
 int score_by_count(int count, bool is_mine) {
     switch (count) {
         case 6: return is_mine ? 1000000 : -1000000;
@@ -119,6 +189,15 @@ int score_by_count(int count, bool is_mine) {
     }
 }
 
+/**
+ * @brief Asigna un valor heurístico según la cantidad de piedras en una ventana
+ * de longitud 6, considerando si es propia, del oponente y si es "wide open".
+ *
+ * @param count Número de piedras consecutivas en la ventana.
+ * @param is_mine Indica si las piedras son propias (true) o del oponente (false).
+ * @param wide_open Indica si la ventana tiene ambos extremos abiertos.
+ * @return Valor heurístico asignado a la ventana.
+ */
 int evaluate_line(Board board, int r, int c, int dr, int dc) {
     int my_stones = 0;
     int opponent_stones = 0;
@@ -148,6 +227,13 @@ int evaluate_line(Board board, int r, int c, int dr, int dc) {
     return 0;
 }
 
+/**
+ * @brief Evalúa todo el tablero calculando el puntaje heurístico total
+ * sumando las evaluaciones de todas las líneas posibles.
+ *
+ * @param board Tablero de juego de 19x19.
+ * @return Puntaje heurístico total de la posición.
+ */
 int evaluate_fitness(Board board) {
     int total_score = 0;
 
@@ -167,32 +253,20 @@ int evaluate_fitness(Board board) {
 }
 
 
-
-// ---------------------------- Lógica de Amenazas --------------------------------
-
-struct Win{
-    bool win;
-    vector<Pos> move;
-};
-
-struct Move {
-    Pos p1, p2;
-    int type;
-};
-
-struct ThreatsSearch{
-    Win win;
-    bool op_forced;
-    int score;
-    vector<Move> threats;
-    vector<Move> forced_defense;
-};
-
-struct Threat{
-    Win win;
-    bool op_forced;
-};
-
+/**
+ * @brief Evalúa amenazas en una línea específica y actualiza puntaje y amenazas.
+ *
+ * @param board Tablero de juego.
+ * @param r Fila inicial.
+ * @param c Columna inicial.
+ * @param dr Incremento de fila.
+ * @param dc Incremento de columna.
+ * @param acc_score Referencia al score acumulado del tablero.
+ * @param threats Vector de amenazas detectadas (se actualiza).
+ * @param forced_defense Vector de defensas forzadas del oponente (se actualiza).
+ * @param player Jugador a evaluar (1 = propio, 2 = oponente).
+ * @return Estructura Threat con información de la línea.
+ */
 Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_score, vector<Move>& threats, vector<Move>& forced_defense, int player) {
     
     Threat threat = {{false, {}}, false};
@@ -332,7 +406,6 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
         } else {
 
             // Caso en que no es amenaza open, pero también se puede hacer un 4 wide_open
-
             vector<int> range = {-1, 0, 5, 6};
             bool wide_open = true;
             for(int &i : range){
@@ -379,38 +452,6 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
                 }
             }
 
-            // } else if (wide_open && my_stones == 3){
-
-            //     bool different = true;
-
-            //     // Chequear si hay una amenaza de 3 open doble que es imparable
-            //     for(auto &t : threats){
-            //         if(t.type == 3 && 
-            //             (t.p1.x != possible_threats.p1.x && t.p1.y != possible_threats.p1.y) && 
-            //             (t.p2.x != possible_threats.p2.x && t.p2.y != possible_threats.p2.y))
-            //             {
-            //             threat.win.win = true;
-            //             threat.win.move = {t.p1, possible_threats.p1};
-            //         }
-
-            //         if( t.p1.x == possible_threats.p1.x && t.p1.y == possible_threats.p1.y && 
-            //             t.p2.x == possible_threats.p2.x && t.p2.y == possible_threats.p2.y)
-            //             {
-            //             different = false;
-            //         }
-
-            //     }
-                
-            //     if(different){
-            //         possible_threats.type = 3;
-            //         threats.push_back(possible_threats);
-            //     }
-
-            // }
-
-            // return threat;
-
-
         }
 
         acc_score += score_by_count(my_stones, true);
@@ -422,7 +463,6 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
 
         if(opponent_stones == 4 || opponent_stones == 5){
             threat.op_forced = true;
-            // cout << "Hay una jugada forzada de al menos una piedra del rival" << endl;
         }
 
         if(open){
@@ -448,9 +488,6 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
             acc_score += score_by_count(opponent_stones, false);
 
             if(wide_open && opponent_stones == 4){
-                // printf("Jugadas que tengo para defender: (%d,%d) y (%d,%d)\n", empty_bounds[0].x, empty_bounds[0].y, possible_threats.p2.x, possible_threats.p2.y);
-                // printf("(%d,%d) y (%d,%d)\n", empty_bounds[1].x, empty_bounds[1].y, possible_threats.p1.x, possible_threats.p1.y);
-                // printf("(%d,%d) y (%d,%d)\n", possible_threats.p1.x, possible_threats.p1.y, possible_threats.p2.x, possible_threats.p2.y);
                 forced_defense.push_back({empty_bounds[0], possible_threats.p2, 4});
                 forced_defense.push_back({empty_bounds[1], possible_threats.p1, 4});
                 forced_defense.push_back({possible_threats.p1, possible_threats.p2, 4});
@@ -481,10 +518,8 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
             acc_score += score_by_count(opponent_stones, false);
 
             if(wide_open && possible_threat_side == 1){
-                // printf("Jugadas que tengo para defender: (%d,%d) y (%d,%d)\n", empty_bounds[1].x, empty_bounds[1].y, possible_threats.p1.x, possible_threats.p1.y);
                 forced_defense.push_back({empty_bounds[1], possible_threats.p1, 5});
             } else if(wide_open && possible_threat_side == 2){
-                // printf("Jugadas que tengo para defender: (%d,%d) y (%d,%d)\n", empty_bounds[0].x, empty_bounds[0].y, possible_threats.p2.x, possible_threats.p2.y);
                 forced_defense.push_back({empty_bounds[0], possible_threats.p2, 5});
             }
 
@@ -501,11 +536,18 @@ Threat evaluate_line_threat(Board board, int r, int c, int dr, int dc, int &acc_
 }
 
 
-// Tiene que devolver múltiples cosas: 
-// - Debe ser capaz de detectar victorias directas, en cuyo caso, devolvemos esa jugada de una vez
-// - Debe ser capaz de detectar si el rival tiene jugada forzada de al menos una casilla, es decir, el rival tiene un open (no wide_open), en este caso llamamos a minimax normal
-// - Como minimax puede llegar a ser llamada a partir de ella, aprovechamos y calculamos el fitness o score de la posición actual que no cuesta nada.
-// - En caso de que el rival no tenga ninguna jugada que nos fuerce a taparlo, entonces llamamos a VCF y le pasamos los threats calculados aquí
+/**
+ * @brief Evalúa todas las amenazas del tablero para un jugador dado.
+ *
+ * - Detecta victorias directas.
+ * - Detecta jugadas forzadas del oponente.
+ * - Calcula score heurístico de la posición.
+ * - Devuelve amenazas y defensas posibles.
+ *
+ * @param board Tablero de juego.
+ * @param player Jugador a evaluar (1 = propio, 2 = oponente).
+ * @return Estructura ThreatsSearch con toda la información de amenazas.
+ */
 ThreatsSearch evaluate_threats(Board board, int player) {
 
     ThreatsSearch threatSearch = {{false, {}}, false, 0, {}};
@@ -513,7 +555,6 @@ ThreatsSearch evaluate_threats(Board board, int player) {
     int total_score = 0;
     vector<Move> threats = {};
     vector<Move> forced_defense = {};
-    // Direcciones: Horizontal (1,0), Vertical (0,1), Diag1 (1,1), Diag2 (1,-1)
     int dr[] = {1, 0, 1, 1};
     int dc[] = {0, 1, 1, -1};
 
@@ -539,60 +580,115 @@ ThreatsSearch evaluate_threats(Board board, int player) {
 }
 
 
-// < ---------------------------------------------------------------------------------- >
+int evaluate_local(Board board, int r, int c){
+    int score = 0;
+    int dr[] = {1, 0, 1, 1};
+    int dc[] = {0, 1, 1, -1};
+
+    for (int d = 0; d < 4; ++d) {
+        for (int offset = -5; offset <= 0; ++offset) {
+            int sr = r + offset * dr[d];
+            int sc = c + offset * dc[d];
+
+            score += evaluate_line(board, sr, sc, dr[d], dc[d]);
+        }
+    }
+
+    return score;
+}
 
 
+int evaluate_move(Board board, const MovePair& m, bool isMaximizing) {
+    int player = isMaximizing ? 1 : 2;
+    int delta = 0;
 
+    delta -= evaluate_local(board, m.p1.x, m.p1.y);
+
+    board[m.p1.x][m.p1.y] = player;
+
+    delta += evaluate_local(board, m.p1.x, m.p1.y);
+
+    if (!m.single_stone) {
+        delta -= evaluate_local(board, m.p2.x, m.p2.y);
+        board[m.p2.x][m.p2.y] = player;
+        delta += evaluate_local(board, m.p2.x, m.p2.y);
+    }
+
+    board[m.p1.x][m.p1.y] = 0;
+    if (!m.single_stone) board[m.p2.x][m.p2.y] = 0;
+
+    return delta;
+}
+
+
+/**
+ * @brief Algoritmo minimax con poda alpha-beta y transposición usando hash Zobrist.
+ *
+ * @param board Tablero actual.
+ * @param depth Profundidad restante para búsqueda.
+ * @param alpha Valor alpha para poda.
+ * @param beta Valor beta para poda.
+ * @param isMaximizing Indica si el nodo actual es de maximización.
+ * @param stones_req Número de piedras a colocar en el turno.
+ * @return Valor evaluado del nodo.
+ */
 int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int stones_req) {
-    // 1. Verificación de seguridad y salida
-    if (timeout_flag.load()) return isMaximizing ? -1e8 : 1e8; // Valor neutral/malo si cortamos
+    if (timeout_flag.load()) return isMaximizing ? -1e8 : 1e8;
     
     if (depth == 0) {
         return evaluate_fitness(board);
     }
 
-    // 2. Generar movimientos basados en los candidatos de cercanía
     auto candidates = get_candidates(board);
     auto moves = generate_move_combinations(candidates, stones_req);
 
-    // Si no hay movimientos posibles, evaluamos el estado actual
+    vector<pair<int, MovePair>> scored_moves;
+
+    for (auto& m : moves) {
+        int score = evaluate_move(board, m, isMaximizing);
+        scored_moves.push_back({score, m});
+    }
+
+    if (isMaximizing) {
+        sort(scored_moves.begin(), scored_moves.end(),
+            [](auto& a, auto& b) { return a.first > b.first; });
+    } else {
+        sort(scored_moves.begin(), scored_moves.end(),
+            [](auto& a, auto& b) { return a.first < b.first; });
+    }
+
     if (moves.empty()) return evaluate_fitness(board);
 
     if (isMaximizing) {
         int maxEval = -1e9;
-        for (auto& m : moves) {
-            // SIMULAR (Backtracking)
+        for (auto& [_, m] : scored_moves) {
             board[m.p1.x][m.p1.y] = 1; 
             if (!m.single_stone) board[m.p2.x][m.p2.y] = 1;
 
-            // En Connect6, tras el primer turno, siempre se piden 2 piedras
             int eval = minimax(board, depth - 1, alpha, beta, false, 2);
 
-            // DESHACER
             board[m.p1.x][m.p1.y] = 0;
             if (!m.single_stone) board[m.p2.x][m.p2.y] = 0;
 
-            maxEval = std::max(maxEval, eval);
-            alpha = std::max(alpha, eval);
+            maxEval = max(maxEval, eval);
+            alpha = max(alpha, eval);
             
             if (beta <= alpha || timeout_flag.load()) break;
         }
         return maxEval;
     } else {
         int minEval = 1e9;
-        for (auto& m : moves) {
-            // SIMULAR oponente
+        for (auto& [_, m] : scored_moves) {
             board[m.p1.x][m.p1.y] = 2;
             if (!m.single_stone) board[m.p2.x][m.p2.y] = 2;
 
             int eval = minimax(board, depth - 1, alpha, beta, true, 2);
 
-            // DESHACER
             board[m.p1.x][m.p1.y] = 0;
             if (!m.single_stone) board[m.p2.x][m.p2.y] = 0;
 
-            minEval = std::min(minEval, eval);
-            beta = std::min(beta, eval);
+            minEval = min(minEval, eval);
+            beta = min(beta, eval);
 
             if (beta <= alpha || timeout_flag.load()) break;
         }
@@ -600,6 +696,15 @@ int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int 
     }
 }
 
+/**
+ * @brief Busca la mejor jugada considerando todas las combinaciones de movimientos
+ * hasta una profundidad fija, usando minimax.
+ *
+ * @param board Tablero actual.
+ * @param depth Profundidad de búsqueda.
+ * @param stones_req Número de piedras a colocar.
+ * @return Mejor par de movimientos encontrado.
+ */
 MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
     auto candidates = get_candidates(board);
     auto moves = generate_move_combinations(candidates, stones_req);
@@ -613,7 +718,6 @@ MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
         board[m.p1.x][m.p1.y] = 1;
         if (!m.single_stone) board[m.p2.x][m.p2.y] = 1;
 
-        // Llamada al minimax recursivo
         int v = minimax(board, depth - 1, -1e9, 1e9, false, 2);
 
         board[m.p1.x][m.p1.y] = 0;
@@ -627,28 +731,29 @@ MovePair solve_at_fixed_depth(Board board, int depth, int stones_req) {
     return best_m;
 }
 
-
-
+/**
+ * @brief Busca recursivamente Victory by Continuous Four (VCF) en el tablero.
+ *
+ * @param board Tablero actual.
+ * @param is_attacking Indica si es turno de ataque (true) o defensa (false).
+ * @param depth Profundidad restante para la búsqueda VCF.
+ * @return true si se encuentra victoria forzada, false de lo contrario.
+ */
 bool vcf_recursive(Board board, bool is_attacking, int depth){
 
     if(depth == 0) return false;
 
     if(is_attacking){
 
-        cout << "Ataque..." << endl;
         ThreatsSearch board_threats = evaluate_threats(board, 1);
         if(board_threats.win.win){
-            cout << "Victoria evaluada..." << endl;
             return true;
         }
         if(board_threats.op_forced){
-            cout << "Tengo jugada forzada que no puedo controlar..." << endl;
             return false;
         }
 
         for(auto &t : board_threats.threats){
-
-            printf("Ahora podemos atacar con (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
 
             board[t.p1.x][t.p1.y] = 1;
             board[t.p2.x][t.p2.y] = 1;
@@ -666,14 +771,11 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
 
     } else {
 
-        cout << "Evaluamos defensa..." << endl;
         ThreatsSearch board_threats = evaluate_threats(board, 2);
         if(board_threats.win.win){
-            cout << "Gana el rival" << endl;
             return false;
         }
         if(board_threats.forced_defense.size() == 0){
-            cout << "No hay amenazas forzadas" << endl;
             return false;
         } 
 
@@ -682,8 +784,6 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
         for(auto &t : board_threats.forced_defense){
             board[t.p1.x][t.p1.y] = 2;
             board[t.p2.x][t.p2.y] = 2;
-
-            printf("Nos defiende con (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
 
             if(!vcf_recursive(board, true, depth - 1)){
                 forced_win = false;
@@ -703,30 +803,26 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
 
 }
 
-struct VCFMove{
-    bool vcf_win;
-    Move vcf_move;
-};
 
-
-
+/**
+ * @brief Busca una Victory by Continuous Four (VCF) considerando todas las amenazas.
+ *
+ * @param board Tablero actual.
+ * @param threats Amenazas detectadas previamente.
+ * @return Estructura VCFMove indicando si se logró VCF y el movimiento correspondiente.
+ */
 VCFMove vcf_search(Board board, vector<Move> threats){
 
     VCFMove vcf_move;
-
-    cout << "Busquemos una victoria forzada con VCF..." << endl;
 
     for(auto &t : threats){
 
         board[t.p1.x][t.p1.y] = 1;
         board[t.p2.x][t.p2.y] = 1;
 
-        printf("Probando rama de (%d,%d) y (%d,%d)\n", t.p1.x, t.p1.y, t.p2.x, t.p2.y);
-
         if(vcf_recursive(board, false, 8)){
             vcf_move.vcf_win = true;
             vcf_move.vcf_move = {t.p1, t.p2, 0};
-            cout << "Conseguimos una victoria" << endl;
             return vcf_move;
         }
 
@@ -743,6 +839,12 @@ VCFMove vcf_search(Board board, vector<Move> threats){
 }
 
 
+/**
+ * @brief Lógica principal de juego conectándose al servidor, enviando movimientos y recibiendo estados.
+ *
+ * @param channel Canal GRPC para la comunicación.
+ * @param teamName Nombre del equipo registrado.
+ */
 void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
     auto stub = GameServer::NewStub(channel);
     ClientContext context;
@@ -751,21 +853,21 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
     std::shared_ptr<ClientReaderWriter<PlayerAction, GameState>> stream(
         stub->Play(&context));
 
-    // 1. Registro del equipo
-    std::cout << "🔄 Registrando equipo: " << teamName << std::endl;
+    // Registro del equipo
+    cout << "🔄 Registrando equipo: " << teamName << endl;
     PlayerAction register_action;
     register_action.set_register_team(teamName);
     stream->Write(register_action);
 
     GameState state;
-    // 2. Bucle principal de juego (Recibir estados del servidor)
+    // Bucle principal de juego (Recibir estados del servidor)
     while (stream->Read(&state)) {
         if (state.status() == connect6::GameState_Status_WAITING) {
-            std::cout << "⏳ Esperando contrincante..." << std::endl;
+            cout << "⏳ Esperando contrincante..." << std::endl;
         } 
         else if (state.status() == connect6::GameState_Status_PLAYING) {
             if (state.is_my_turn()) {
-                std::cout << "🎲 Es mi turno, papaíto. Piedras requeridas: " << state.stones_required() << std::endl;
+                cout << "🎲 Es mi turno. Piedras requeridas: " << state.stones_required() << std::endl;
 
                 // Lógica de minimax iterativo 
                 MovePair best_action; 
@@ -774,7 +876,6 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
 
                 timeout_flag.store(false);
 
-                // --------- Threats ------------
                 ThreatsSearch board_threats = evaluate_threats(current_board, 1);
                 bool win = false;
                 if(board_threats.win.win && board_threats.win.move.size() == 2){
@@ -795,14 +896,12 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
                     win = true;
                 }
 
-                // ------------------------------
-
                 PlayerAction move_action;
                 auto* move = move_action.mutable_move();
                 
                 // Iniciamos cronómetro en un hilo aparte
-                std::thread timer([&]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(9000)); // Tiempo límite
+                thread timer([&]() {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(9500)); // Tiempo límite
                     timeout_flag.store(true); 
                 });
 
@@ -822,20 +921,15 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
 
                 if (!win){
                     
-                    for (int d = 1; d <= 6; ++d) {
-                        
+                    for (int d = 1; d <= 4; ++d) {
                         // Llamamos a la búsqueda para esta profundidad específica
                         MovePair move_at_depth = solve_at_fixed_depth(current_board, d, state.stones_required());
-                        
                         // Si durante la búsqueda se acabó el tiempo, ignoramos el resultado incompleto
                         if (timeout_flag.load()) {
-                            std::cout << "Tiempo agotado. Usando mejor jugada de capa " << d-1 << std::endl;
                             break;
                         }
-
                         // Si terminamos la capa a tiempo, esta es nuestra nueva mejor jugada
                         best_action = move_at_depth;
-                        std::cout << "Capa " << d << " analizada con éxito." << std::endl;
                     }
 
                     if (timer.joinable()) timer.detach();
@@ -848,7 +942,6 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
                 stone1->set_x(best_action.p1.x);
                 stone1->set_y(best_action.p1.y);
 
-                // Piedra 2 (Solo si el juego requiere 2 y no es un movimiento "single_stone")
                 if (state.stones_required() == 2 && !best_action.single_stone) {
                     connect6::Point* stone2 = move->add_stones();
                     stone2->set_x(best_action.p2.x);
@@ -857,16 +950,16 @@ void playGame(std::shared_ptr<Channel> channel, std::string teamName) {
 
                 stream->Write(move_action);
                 if(state.stones_required() == 2){
-                    std::cout << "✅ Movimiento enviado: (" << best_action.p1.x << "," << best_action.p1.y << ")" << " y (" << best_action.p2.x << "," << best_action.p2.y << ")";
+                    cout << "✅ Movimiento enviado: (" << best_action.p1.x << "," << best_action.p1.y << ")" << " y (" << best_action.p2.x << "," << best_action.p2.y << ")";
                 } else {
-                    std::cout << "✅ Movimiento enviado: (" << best_action.p1.x << "," << best_action.p1.y << ")";
+                    cout << "✅ Movimiento enviado: (" << best_action.p1.x << "," << best_action.p1.y << ")";
                 }
             } else {
-                std::cout << "⌛ Esperando al perdedor..." << std::endl;
+                cout << "⌛ Esperando al perdedor..." << endl;
             }
         } 
         else if (state.status() == connect6::GameState_Status_FINISHED) {
-            std::cout << "🏁 PARTIDA FINALIZADA. Ganador: " << state.winner() << std::endl;
+            cout << "🏁 PARTIDA FINALIZADA. Ganador: " << state.winner() << endl;
             break; 
         }
     }
@@ -876,19 +969,19 @@ int main() {
     srand(time(NULL));
 
     // Lee la dirección del servidor de las variables de entorno, como en Go
-    char* addr_env = std::getenv("SERVER_ADDR");
-    std::string target_str = (addr_env) ? addr_env : "servidor:50051";
+    char* addr_env = getenv("SERVER_ADDR");
+    string target_str = (addr_env) ? addr_env : "servidor:50051";
 
-    char* team_env = std::getenv("TEAM_NAME");
-    std::string team_name = (team_env) ? team_env : "Bot_CPP_David";
+    char* team_env = getenv("TEAM_NAME");
+    string team_name = (team_env) ? team_env : "Bot_CPP_David";
 
     while (true) {
-        std::cout << "🔄 Conectando a " << target_str << " como " << team_name << "..." << std::endl;
+        cout << "🔄 Conectando a " << target_str << " como " << team_name << "..." << std::endl;
         
         auto channel = grpc::CreateChannel(target_str, grpc::InsecureChannelCredentials());
         playGame(channel, team_name);
 
-        std::cout << "⏳ Reconectando en 3 segundos..." << std::endl;
+        cout << "⏳ Reconectando en 3 segundos..." << std::endl;
         std::this_thread::sleep_for(std::chrono::seconds(3));
     }
 
