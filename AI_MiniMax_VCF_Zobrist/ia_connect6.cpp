@@ -768,7 +768,6 @@ int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int 
     if (isMaximizing) {
         maxEval = -1e9;
         for (auto& m : moves) {
-            // SIMULAR (Backtracking)
             board[m.p1.x][m.p1.y] = 1; 
             if (!m.single_stone) board[m.p2.x][m.p2.y] = 1;
 
@@ -777,7 +776,7 @@ int minimax(Board board, int depth, int alpha, int beta, bool isMaximizing, int 
             if (!m.single_stone)
                 new_hash = update_hash(new_hash, m.p2.x, m.p2.y, 0, 1);
 
-            new_hash ^= zobrist_turn[1]; // quitar turno actual
+            new_hash ^= zobrist_turn[1];
             new_hash ^= zobrist_turn[0];
 
             // En Connect6, tras el primer turno, siempre se piden 2 piedras
@@ -1026,7 +1025,6 @@ void playGame(shared_ptr<Channel> channel, string teamName) {
 
                 timeout_flag.store(false);
 
-                // --------- Threats ------------
                 ThreatsSearch board_threats = evaluate_threats(current_board, 1);
                 bool win = false;
                 if(board_threats.win.win && board_threats.win.move.size() == 2){
@@ -1047,14 +1045,12 @@ void playGame(shared_ptr<Channel> channel, string teamName) {
                     win = true;
                 }
 
-                // ------------------------------
-
                 PlayerAction move_action;
                 auto* move = move_action.mutable_move();
                 
                 // Iniciamos cronómetro en un hilo aparte
                 thread timer([&]() {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(9000)); // Tiempo límite
+                    std::this_thread::sleep_for(std::chrono::milliseconds(9000));
                     timeout_flag.store(true); 
                 });
 
@@ -1062,7 +1058,6 @@ void playGame(shared_ptr<Channel> channel, string teamName) {
 
                     VCFMove vcf_move = vcf_search(current_board, board_threats.threats);
                     
-                    // cout << "En este momento llamaría a VCF, SI TAN SOLO TUVIERA UNO" << endl;
                     if(vcf_move.vcf_win){
                         best_action.p1 = vcf_move.vcf_move.p1;
                         best_action.p2 = vcf_move.vcf_move.p2;

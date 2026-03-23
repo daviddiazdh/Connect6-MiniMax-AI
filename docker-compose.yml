@@ -17,17 +17,6 @@ services:
     networks:
       - game-network
 
-  ia-worse:
-    build: ./AI_MiniMax_VCF
-    restart: always
-    environment:
-      - SERVER_ADDR=servidor:50051
-      - TEAM_NAME=Bot_CPP_Worse
-    depends_on:
-      - servidor
-    networks:
-      - game-network
-
 networks:
   game-network:
     driver: bridge
