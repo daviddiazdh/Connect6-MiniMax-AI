@@ -1,6 +1,4 @@
-# Laboratorio-Lenguajes-de-Programacion-Tarea-2
-
-Repositorio del proyecto 1 del curso **Inteligencia Artificial I** de la **Universidad Simón Bolívar** durante el trimestre **Enero-Marzo 2026**. 
+# Repositorio del proyecto 1 del curso **Inteligencia Artificial I** de la **Universidad Simón Bolívar** durante el trimestre **Enero-Marzo 2026**. 
 
 Autores: **David Díaz (20-10019) y Alan Argotte (19-10664)**  
 
@@ -9,13 +7,13 @@ Autores: **David Díaz (20-10019) y Alan Argotte (19-10664)**
 ### Estructura del repositorio
 
 Este repositorio está compuesto por una carpeta:  
-- `AI_MiniMax_VCF`: En ella se encuentra el archivo ia_connect6.cpp que contiene el código del agente implementado
-                    también contiene el Dockerfile que permite la ejecución del agente. Internamente contiene la carpeta pb, 
-                    la cual contiene las clases generadas automáticamente por proto.
-
+- `AI_MiniMax_VCF_Zobrist`: En ella se encuentra el archivo ia_connect6.cpp que contiene el código del agente implementado también contiene el Dockerfile que permite la ejecución del agente. Internamente contiene la carpeta pb, la cual contiene las clases generadas automáticamente por proto.
 
 ### Instrucciones de ejecución
 En la carpeta raíz, misma carpeta donde se encuentra este archivo se puede:
-Levantar todo: docker compose up --build
-Ver el tablero: `http://localhost:8080`
-Logs de la IA: docker logs -f mi-ia-1
+
+- Levantar todo: `docker compose up --build`
+
+- Ver el tablero: `http://localhost:8080`
+
+- Logs de la IA: `docker logs -f mi-ia-1`

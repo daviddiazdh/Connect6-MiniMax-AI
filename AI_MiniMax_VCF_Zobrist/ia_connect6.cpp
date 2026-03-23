@@ -120,6 +120,12 @@ struct Threat{
     bool op_forced;
 };
 
+struct VCFMove{
+    bool vcf_win;
+    Move vcf_move;
+};
+
+
 /**
  * @brief Sincroniza el tablero local con el estado recibido del servidor.
  *
@@ -945,15 +951,6 @@ bool vcf_recursive(Board board, bool is_attacking, int depth){
     }
 
 }
-
-/**
- * @brief Resultado de búsqueda VCF.
- */
-struct VCFMove{
-    bool vcf_win;
-    Move vcf_move;
-};
-
 
 /**
  * @brief Busca una Victory by Continuous Four (VCF) considerando todas las amenazas.
